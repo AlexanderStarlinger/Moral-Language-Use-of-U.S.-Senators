@@ -1,0 +1,570 @@
+---
+title: "Assignment4_CSS"
+author: "Alexander Starlinger"
+date: "2023-01-18"
+output: html_document
+---
+
+# Setup
+
+## package import
+
+This is a custom function that finds uninstalled packages and asks if they should be installed (because the script includes a lot of packages).
+Note: also import ggresidpanel (because it has nice and easy residual plots)
+      viridis (because i think its pretty)
+      missMethods (for mean imputation).
+
+```{r package import}
+
+using <-function(...) {
+    libs<-unlist(list(...))
+    req<-unlist(lapply(libs,require,character.only=TRUE))
+    need<-libs[req==FALSE]
+    n<-length(need)
+    if(n>0){
+        libsmsg<-if(n>2) paste(paste(need[1:(n-1)],collapse=", "),",",sep="") else need[1]
+        print(libsmsg)
+        if(n>1){
+            libsmsg<-paste(libsmsg," and ", need[n],sep="")
+        }
+        libsmsg<-paste("The following packages could not be found: ",libsmsg,"\n\r\n\rInstall missing packages?",collapse="")
+        if(winDialog(type = c("yesno"), libsmsg)=="YES"){       
+            install.packages(need)
+            lapply(need,require,character.only=TRUE)
+        }
+    }
+}
+
+
+using("lme4","LMERConvenienceFunctions","MASS","psych","Hmisc","ggplot2","rcompanion","emmeans","lsmeans","ggthemes",
+      "lmerTest","robustlmm","ggplot2","tseries","nlme","gridExtra","robustlmm","dplyr","car","reshape2","sjPlot","stargazer",
+      "ggResidpanel", "viridis", "missMethods", "ggExtra")
+
+```
+
+## Functions
+
+
+```{r help functions}
+
+# outliers
+
+remove_outliers <- function(x, na.rm = TRUE, ...) {
+  qnt <- quantile(x, probs=c(.25, .75), na.rm = na.rm, ...)
+  H <- 1.5 * IQR(x, na.rm = na.rm)
+  y <- x
+  y[x < (qnt[1] - H)] <- NA
+  y[x > (qnt[2] + H)] <- NA
+  y
+}
+
+# more?
+
+
+```
+
+# Import and Cleaning
+
+## import data
+
+```{r set directory and import}
+
+# set wd
+
+setwd("C:/Users/Alex/Desktop/Uni/Master Psychologie/WS 22/SE CSS/Final Project/project/data")
+
+# import full df_tweets set
+
+df_tweets <- read.csv("tweets_outcomes.csv")
+
+```
+
+
+## data cleaning 
+
+```{r remove variables}
+
+df_tweets <- df_tweets %>% select(-X, -Unnamed..0)
+
+```
+
+## first: append aggregate variables for each foundation 
+
+```{r aggregate outcomes}
+
+df_tweets$harm <- rowSums(df_tweets[, c("harm_virtue", "harm_vice")], na.rm = TRUE)
+df_tweets$fairness <- rowSums(df_tweets[, c("fairness_virtue", "fairness_vice")], na.rm = TRUE)
+df_tweets$ingroup <- rowSums(df_tweets[, c("ingroup_virtue", "ingroup_vice")], na.rm = TRUE)
+df_tweets$authority <- rowSums(df_tweets[, c("authority_virtue", "authority_vice")], na.rm = TRUE)
+df_tweets$purity <- rowSums(df_tweets[, c("purity_virtue", "purity_vice")], na.rm = TRUE)
+
+df_tweets <- df_tweets %>% mutate_at(c("harm", "fairness", "ingroup", "authority", "purity"), ~ na_if(., 0)) 
+
+# were also gonna do 5 which keep the 0s: foundation_full
+
+df_tweets$harm_full <- rowSums(df_tweets[, c("harm_virtue", "harm_vice")], na.rm = TRUE)
+df_tweets$fairness_full <- rowSums(df_tweets[, c("fairness_virtue", "fairness_vice")], na.rm = TRUE)
+df_tweets$ingroup_full <- rowSums(df_tweets[, c("ingroup_virtue", "ingroup_vice")], na.rm = TRUE)
+df_tweets$authority_full <- rowSums(df_tweets[, c("authority_virtue", "authority_vice")], na.rm = TRUE)
+df_tweets$purity_full <- rowSums(df_tweets[, c("purity_virtue", "purity_vice")], na.rm = TRUE)
+
+# check
+
+glimpse(df_tweets)
+
+```
+
+
+```{r df_tweets cleaning: transform variables and remove outliers}
+
+df_tweets <- df_tweets %>%
+  mutate(party = as.factor(party),
+         congress_ID = as.factor(congress_ID),
+         Username = as.factor(Username),
+         harm = remove_outliers(harm),
+         fairness = remove_outliers(fairness),
+         ingroup = remove_outliers(ingroup),
+         authority = remove_outliers(authority),
+         purity = remove_outliers(purity))
+
+glimpse(df_tweets)
+
+
+```
+
+## Box Cox Transform
+
+Try to fix non-normality. All outcomes quite similar distributed so only estimate one lambda. 
+And indeed, it fixes all of them equally not great.
+
+```{r}
+
+Box = boxcox(harm ~ party + congress_ID + party*congress_ID,
+             data = df_tweets)
+
+Cox = data.frame(Box$x, Box$y)
+
+Cox2 = Cox[with(Cox, order(-Cox$Box.y)),]
+
+lambda = Cox2[1, "Box.x"]
+
+bc_transform <- function(x, lambda) {
+  (x^lambda-1)/lambda
+}
+ 
+df_tweets <- df_tweets %>%
+  mutate(harm = bc_transform(harm, lambda),
+         fairness = bc_transform(fairness, lambda),
+         ingroup = bc_transform(ingroup, lambda),
+         authority = bc_transform(authority, lambda),
+         purity = bc_transform(purity, lambda)
+         )
+
+
+```
+
+
+# descriptives 
+
+```{r descriptives of outcomes per party}
+
+df_tweets %>%
+  group_by(party) %>%
+  summarise(
+    N_total = n(),
+    harm_mean = round(mean(harm, na.rm = TRUE), 3),
+    harm_sd = round(sd(harm, na.rm = TRUE), 3),
+    harm_n = sum(!is.na(harm)),
+    
+    mean_fairness = round(mean(fairness, na.rm = TRUE), 3),
+    sd_fairness = round(sd(fairness, na.rm = TRUE), 3),
+    fairness_n = sum(!is.na(fairness)),
+    
+    mean_ingroup = round(mean(ingroup, na.rm = TRUE), 3),
+    sd_ingroup = round(sd(ingroup, na.rm = TRUE), 3),
+    ingroup_n = sum(!is.na(ingroup)),
+    
+    mean_authority = round(mean(authority, na.rm = TRUE), 3),
+    sd_authority = round(sd(authority, na.rm = TRUE), 3),
+    authority_n = sum(!is.na(authority)),
+    
+    mean_purity = round(mean(purity, na.rm = TRUE), 3),
+    sd_purity = round(sd(purity, na.rm = TRUE), 3),
+    purity_n = sum(!is.na(purity)),
+    
+    mean_morality = round(mean(morality_general, na.rm = TRUE), 3),
+    sd_morality = round(sd(morality_general, na.rm = TRUE), 3),
+    morality_n = sum(!is.na(morality_general))
+  )
+
+#also: get how many tweets by R vs. D in total:
+
+tapply(df_tweets$index, df_tweets$party, length)
+
+```
+## visualize
+
+```{r parameters for viz}
+
+# colors
+
+demrep <- c(cividis(1, begin  = .05), turbo(1, begin  = .95))
+demrep_light <- c(mako(1, begin = 0.55), rocket(1, begin = 0.65))
+
+```
+
+
+### timeseries x party
+
+```{r timeseries x party: harm}
+
+ts_harm  <-  ggplot(df_tweets, aes(x = Year, y = harm, color = party)) +
+  geom_jitter(alpha = .40) +
+  geom_point(alpha = .40) +
+  geom_smooth(method = "lm", fill = NA, linewidth = 1.8) +
+  scale_colour_manual(values = demrep) +
+  ylab("Frequency of Harm [Transformed]") +
+  theme_bw() 
+  
+ggMarginal(ts_harm, type = "boxplot", groupFill = TRUE, margins = "y")
+
+```
+
+```{r timeseries x party: fairness}
+
+ts_fairness  <-  ggplot(df_tweets, aes(x = Year, y = fairness, color = party)) +
+  geom_jitter(alpha = .40) +
+  geom_point(alpha = .40)  +
+  geom_smooth(method = "lm", linewidth = 1.8) +
+  scale_colour_manual(values = demrep) +
+  ylab("Frequency of Fairness [Transformed]") +
+  theme_bw() 
+  
+ggMarginal(ts_fairness, type = "boxplot", groupFill = TRUE, margins = "y")
+
+```
+
+```{r timeseries x party: ingroup}
+
+ts_ingroup  <-  ggplot(df_tweets, aes(x = Year, y = ingroup, color = party)) +
+  geom_jitter(alpha = .40) +
+  geom_point(alpha = .40) +
+  geom_smooth(method = "lm", fill = NA, linewidth = 1.8) +
+  scale_colour_manual(values = demrep) +
+  ylab("Frequency of Ingroup [Transformed]") +
+  theme_bw() 
+  
+ggMarginal(ts_ingroup, type = "boxplot", groupFill = TRUE, margins = "y")
+
+```
+
+```{r timeseries x party: authority}
+
+ts_authority  <-  ggplot(df_tweets, aes(x = Year, y = authority, color = party)) +
+  geom_jitter(alpha = .40) +
+  geom_point(alpha = .40) +
+  geom_smooth(method = "lm", fill = NA, linewidth = 1.8) +
+  scale_colour_manual(values = demrep) +
+  ylab("Frequency of Authority [Transformed]") +
+  theme_bw() 
+  
+ggMarginal(ts_authority, type = "boxplot", groupFill = TRUE, margins = "y")
+
+```
+
+```{r timeseries x party: purity}
+
+ts_purity  <-  ggplot(df_tweets, aes(x = Year, y = purity, color = party)) +
+  geom_jitter(alpha = .40) +
+  geom_point(alpha = .40) +
+  geom_smooth(method = "lm", fill = NA, linewidth = 1.8) +
+  scale_colour_manual(values = demrep) +
+  ylab("Frequency of Purity [Transformed]") +
+  theme_bw() 
+  
+ggMarginal(ts_purity, type = "boxplot", groupFill = TRUE, margins = "y")
+
+```
+# Models
+
+
+## First, some correlations (heatmap)
+
+
+```{r correlations: heatmap}
+
+#prepare df
+
+temp <- df_tweets %>% select(harm:purity)
+cor_df <- round(cor(temp, use = "pairwise.complete.obs", method = "spearman"), 2)
+cor_melted <- melt(cor_df)
+
+
+# make heatmap
+
+ggplot(data = cor_melted, aes(Var2, Var1, fill = value)) +
+  geom_tile(color = "white") +
+  geom_text(aes(Var2, Var1, label = value), color = "black") +
+  scale_fill_viridis(3, alpha = .80, limit = c(0,1), option = "cividis") +
+  coord_fixed()
+
+
+```
+
+# Analysis
+
+## internal validity
+
+Correlation matrix suggests that this is gonna be a mess.
+
+-> yup. 
+
+```{r FA}
+
+foundations <- df_tweets %>% select(harm:purity)
+
+fit = fa(foundations,nfactors=2, rotate="oblimin")
+fit
+
+load <- fit$loadings[,1:2] 
+
+df_out <- as.data.frame(load)
+theme<-theme(plot.title = element_text(hjust = 0.5,size=18),legend.position = "none",axis.title=element_text(size=18), panel.background = element_blank(),panel.border=element_rect(fill=NA),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),strip.background=element_blank(),axis.text.x=element_text(colour="black", size=18),axis.text.y=element_text(colour="black",size=18),axis.ticks=element_line(colour="black"),plot.margin=unit(c(1,1,1,1),"line"))
+
+
+ggplot(df_out,aes(x=MR2,y=MR1,color=row.names(df_out),label=row.names(df_out)))+
+  geom_point()+theme + geom_text(size=5, nudge_y =0.05, nudge_x =0.1) + xlim(-0.3,1)+
+  geom_segment(df_out,mapping=aes(x=0,y=0,xend = MR2, yend =MR1), size  =1.2,arrow = arrow())+
+  scale_colour_manual(values = viridis(5)) +
+  geom_hline(yintercept=-.2, linetype="dashed", color = "blue")+
+  ggtitle('Exploratory Factor Analysis of Moral Foundations')
+
+```
+
+Maybe with "0" cases included?
+
+-> cant be factorized, yields heywood-case...
+
+```{r FA: full tweets}
+
+foundations2 <- df_tweets %>% select(harm_full:purity_full)
+
+fit2 = fa(foundations,nfactors=2, rotate="oblimin")
+fit2
+
+load2 <- fit$loadings[,1:2] 
+
+df_out <- as.data.frame(load2)
+theme<-theme(plot.title = element_text(hjust = 0.5,size=18),legend.position = "none",axis.title=element_text(size=18), panel.background = element_blank(),panel.border=element_rect(fill=NA),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),strip.background=element_blank(),axis.text.x=element_text(colour="black", size=18),axis.text.y=element_text(colour="black",size=18),axis.ticks=element_line(colour="black"),plot.margin=unit(c(1,1,1,1),"line"))
+
+
+ggplot(df_out,aes(x=MR2,y=MR1,color=row.names(df_out),label=row.names(df_out)))+
+  geom_point()+theme + geom_text(size=5, nudge_y =0.05, nudge_x =0.1) + xlim(-0.3,1)+
+  geom_segment(df_out,mapping=aes(x=0,y=0,xend = MR2, yend =MR1), size  =1.2,arrow = arrow())+
+  scale_colour_manual(values = viridis(5)) +
+  geom_hline(yintercept=-.2, linetype="dashed", color = "blue")+
+  ggtitle('Exploratory Factor Analysis of Moral Foundations')
+
+
+
+```
+
+## mixed models
+
+
+### Harm
+
+Model for Harm.
+
+```{r harm: model}
+
+harm.model <- lmer(harm ~ party + congress_ID + party*congress_ID + (1 | Username), data = df_tweets)
+
+summary(harm.model)
+tab_model(harm.model)
+
+```
+
+
+```{r harm: profilplots}
+
+# Profilplot
+
+## EMM Objekt erstellen
+
+harm.emms <- emmip(harm.model, party ~ congress_ID, plotit = FALSE)
+rename(harm.emms, Party = tvar)
+
+## baseplot
+
+base_plot <- ggplot(harm.emms, aes(x = xvar, y = yvar, colour = party))
+
+## PP 
+
+base_plot +
+  geom_errorbar(aes(ymin = yvar-SE, ymax = yvar+SE), width = .15) + 
+  geom_point() +
+  geom_line(aes(y = yvar), group = harm.emms$tvar) + 
+  scale_y_continuous() + 
+  scale_colour_manual(values = demrep) +
+  xlab("U.S. Congress [114th - 117th]") +
+  ylab("Frequency of Harm [transformed]") +
+  theme_bw() 
+
+
+```
+
+Residuals.
+
+```{r harm: residuals}
+
+resid_panel(harm.model)
+
+```
+
+
+### Fairness
+
+Model for fairness.
+
+```{r fairness: model}
+
+
+fairness.model <- lmer(fairness ~ party + congress_ID + party*congress_ID + (1 | Username), data = df_tweets)
+summary(fairness.model)
+tab_model(fairness.model)
+
+```
+
+```{r fairness: profilplots}
+
+fairness.emms <- emmip(fairness.model, party ~ congress_ID, plotit = FALSE)
+rename(fairness.emms, Party = tvar)
+
+## baseplot
+
+base_plot <- ggplot(fairness.emms, aes(x = xvar, y = yvar, colour = party))
+
+## PP 
+
+base_plot +
+  geom_errorbar(aes(ymin = yvar-SE, ymax = yvar+SE), width = .15) + 
+  geom_point() +
+  geom_line(aes(y = yvar), group = fairness.emms$tvar) + 
+  scale_y_continuous() + 
+  scale_colour_manual(values = demrep) +
+  xlab("U.S. Congress [114th - 117th]") +
+  ylab("Frequency of Fairness [transformed]") +
+  theme_bw() 
+
+
+```
+
+### ingroup
+
+Model for ingroup.
+
+```{r ingroup: model}
+
+
+ingroup.model <- lmer(ingroup ~ party + congress_ID + party*congress_ID + (1 | Username), data = df_tweets)
+
+summary(ingroup.model)
+tab_model(ingroup.model)
+
+```
+
+```{r ingroup: profilplots}
+
+ingroup.emms <- emmip(ingroup.model, party ~ congress_ID, plotit = FALSE)
+rename(ingroup.emms, Party = tvar)
+
+## baseplot
+
+base_plot <- ggplot(ingroup.emms, aes(x = xvar, y = yvar, colour = party))
+
+## PP 
+
+base_plot +
+  geom_errorbar(aes(ymin = yvar-SE, ymax = yvar+SE), width = .15) + 
+  geom_point() +
+  geom_line(aes(y = yvar), group = ingroup.emms$tvar) + 
+  scale_y_continuous() + 
+  scale_colour_manual(values = demrep) +
+  xlab("U.S. Congress [114th - 117th]") +
+  ylab("Frequency of Ingroup [transformed]") +
+  theme_bw() 
+
+```
+
+### authority
+
+Model for authority.
+
+```{r authority: model}
+
+
+authority.model <- lmer(authority ~ party + congress_ID + party*congress_ID + (1 | Username), data = df_tweets)
+summary(authority.model)
+tab_model(authority.model)
+
+```
+
+```{r authority: profilplots}
+
+authority.emms <- emmip(authority.model, party ~ congress_ID, plotit = FALSE)
+rename(authority.emms, Party = tvar)
+
+## baseplot
+
+base_plot <- ggplot(authority.emms, aes(x = xvar, y = yvar, colour = party))
+
+## PP 
+
+base_plot +
+  geom_errorbar(aes(ymin = yvar-SE, ymax = yvar+SE), width = .15) + 
+  geom_point() +
+  geom_line(aes(y = yvar), group = authority.emms$tvar) + 
+  scale_y_continuous() + 
+  scale_colour_manual(values = demrep) +
+  xlab("U.S. Congress [114th - 117th]") +
+  ylab("Frequency of Authority [transformed]") +
+  theme_bw() 
+
+```
+
+### purity
+
+Model for purity.
+
+```{r purity: model}
+
+
+purity.model <- lmer(purity ~ party + congress_ID + party*congress_ID + (1 | Username), data = df_tweets)
+summary(purity.model)
+tab_model(purity.model)
+
+```
+
+```{r purity: profilplots}
+
+purity.emms <- emmip(purity.model, party ~ congress_ID, plotit = FALSE)
+rename(purity.emms, Party = tvar)
+
+## baseplot
+
+base_plot <- ggplot(purity.emms, aes(x = xvar, y = yvar, colour = party))
+
+## PP 
+
+base_plot +
+  geom_errorbar(aes(ymin = yvar-SE, ymax = yvar+SE), width = .15) + 
+  geom_point() +
+  geom_line(aes(y = yvar), group = purity.emms$tvar) + 
+  scale_y_continuous() + 
+  scale_colour_manual(values = demrep) +
+  xlab("U.S. Congress [114th - 117th]") +
+  ylab("Frequency of Purity [transformed]") +
+  theme_bw() 
+
+```
